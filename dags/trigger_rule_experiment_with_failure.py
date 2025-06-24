@@ -2,6 +2,7 @@ from airflow import DAG
 from airflow.providers.google.cloud.operators.bigquery import BigQueryInsertJobOperator
 from airflow.operators.python import PythonOperator
 from airflow.operators.empty import EmptyOperator
+from airflow.exceptions import AirflowFailException
 from airflow.utils.trigger_rule import TriggerRule
 from airflow.utils.task_group import TaskGroup
 from datetime import datetime
@@ -59,6 +60,8 @@ def generate_and_upload_sales_data(bucket_name, gcs_path, num_orders=500):
     blob.upload_from_string(csv_data, content_type="text/csv")
     print(f"Data uploaded to gs://{bucket_name}/{gcs_path}")
 
+def fail_intentionally():
+    raise AirflowFailException("Intentional failure for testing")
 
 # Default arguments
 default_args = {
@@ -95,25 +98,31 @@ with DAG(
                 },
             )
 
-            load_task = BigQueryInsertJobOperator(
-                task_id=f"load_to_bigquery_table{i}",
-                configuration={
-                    "load": {
-                        "sourceUris": [f"gs://{BUCKET_NAME}/{gcs_path}"],
-                        "destinationTable": {
-                            "projectId": PROJECT_ID,
-                            "datasetId": BIGQUERY_DATASET,
-                            "tableId": table,
-                        },
-                        "sourceFormat": "CSV",
-                        "writeDisposition": "WRITE_APPEND",
-                        "skipLeadingRows": 1,
-                        "schema": {"fields": schema_fields},
-                    }
-                },
-                location="US",
-                project_id=PROJECT_ID,
-            )
+            if i == 2:
+                load_task = PythonOperator(
+                    task_id=f"load_to_bigquery_table{i}",
+                    python_callable=fail_intentionally,
+                )
+            else:
+                load_task = BigQueryInsertJobOperator(
+                    task_id=f"load_to_bigquery_table{i}",
+                    configuration={
+                        "load": {
+                            "sourceUris": [f"gs://{BUCKET_NAME}/{gcs_path}"],
+                            "destinationTable": {
+                                "projectId": PROJECT_ID,
+                                "datasetId": BIGQUERY_DATASET,
+                                "tableId": table,
+                            },
+                            "sourceFormat": "CSV",
+                            "writeDisposition": "WRITE_APPEND",
+                            "skipLeadingRows": 1,
+                            "schema": {"fields": schema_fields},
+                        }
+                    },
+                    location="US",
+                    project_id=PROJECT_ID,
+                )
 
             generate_task >> load_task
 
