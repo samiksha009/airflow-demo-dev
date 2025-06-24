@@ -2,6 +2,7 @@ from airflow import DAG
 from airflow.providers.google.cloud.operators.bigquery import BigQueryInsertJobOperator
 from airflow.operators.python import PythonOperator
 from airflow.operators.empty import EmptyOperator
+from airflow.utils.task_group import TaskGroup
 from datetime import datetime
 import pandas as pd
 from faker import Faker
@@ -12,10 +13,10 @@ import io
 # Configuration
 PROJECT_ID = "airflow-demo-project-463501"
 BUCKET_NAME = "us-central1-airflow-demo-de-53ac71a6-bucket"
-MULTI_GCS_PATHS = [
-    "data/multitable_sample_data1.csv",
-    "data/multitable_sample_data2.csv",
-]
+# MULTI_GCS_PATHS = [
+#     "data/multitable_sample_data1.csv",
+#     "data/multitable_sample_data2.csv",
+# ]
 BIGQUERY_DATASET = "demo_dataset"
 BIGQUERY_TABLES = {
     "data/multitable_sample_data1.csv": "multitable_sample_data1",
@@ -32,7 +33,6 @@ schema_fields = [
     {"name": "order_date", "type": "DATE", "mode": "NULLABLE"},
     {"name": "product", "type": "STRING", "mode": "NULLABLE"},
 ]
-
 
 # Function to generate sales data and upload to GCS
 def generate_and_upload_sales_data(bucket_name, gcs_path, num_orders=500):
@@ -70,7 +70,7 @@ default_args = {
 
 # DAG definition
 with DAG(
-    "joining_multiple_input_tables",
+    "joining_multiple_input_tables_optimized",
     default_args=default_args,
     schedule_interval="0 0 1 * *", 
 ) as dag:
@@ -79,60 +79,43 @@ with DAG(
     end_task = EmptyOperator(task_id="end")
 
     # Task 1: Generate sales data and upload to GCS
-    generate_tasks = {}
-
-    # for i, gcs_path in enumerate(MULTI_GCS_PATHS, start=1):
-    #     task = PythonOperator(
-    #         task_id=f"generate_sales_data_table{i}",
-    #         python_callable=generate_and_upload_sales_data,
-    #         op_kwargs={
-    #             "bucket_name": BUCKET_NAME,
-    #             "gcs_path": gcs_path,
-    #             "num_orders": 500,
-    #         },
-    #     )
-    #     generate_tasks[f"generate_sales_data_table{i}"] = task
-
     # Task 2: Load data from GCS to BigQuery
-    load_tasks = {}
 
-    for i, (gcs_path, table) in enumerate(BIGQUERY_TABLES.items(), start=1):
-        task = PythonOperator(
-            task_id=f"generate_sales_data_table{i}",
-            python_callable=generate_and_upload_sales_data,
-            op_kwargs={
-                "bucket_name": BUCKET_NAME,
-                "gcs_path": gcs_path,
-                "num_orders": 500,
-            },
-        )
-        generate_tasks[f"generate_sales_data_table{i}"] = task
+    with TaskGroup("gneerate_and_load_data", tooltip = "Generate data and load to BigQuery") as gen_load_group:
+        for i, (gcs_path, table) in enumerate(BIGQUERY_TABLES.items(), start=1):
+            generate_task = PythonOperator(
+                task_id=f"generate_sales_data_table{i}",
+                python_callable=generate_and_upload_sales_data,
+                op_kwargs={
+                    "bucket_name": BUCKET_NAME,
+                    "gcs_path": gcs_path,
+                    "num_orders": 10,
+                },
+            )
 
-        task = BigQueryInsertJobOperator(
-            task_id=f"load_to_bigquery_table{i}",
-            configuration={
-                "load": {
-                    "sourceUris": [f"gs://{BUCKET_NAME}/{gcs_path}"],
-                    "destinationTable": {
-                        "projectId": PROJECT_ID,
-                        "datasetId": BIGQUERY_DATASET,
-                        "tableId": table,
-                    },
-                    "sourceFormat": "CSV",
-                    "writeDisposition": "WRITE_APPEND",
-                    "skipLeadingRows": 1,
-                    "schema": {"fields": schema_fields},
-                }
-            },
-            location="US",
-            project_id=PROJECT_ID,
-        )
-        load_tasks[f"load_to_bigquery_table{i}"] = task
+            load_task = BigQueryInsertJobOperator(
+                task_id=f"load_to_bigquery_table{i}",
+                configuration={
+                    "load": {
+                        "sourceUris": [f"gs://{BUCKET_NAME}/{gcs_path}"],
+                        "destinationTable": {
+                            "projectId": PROJECT_ID,
+                            "datasetId": BIGQUERY_DATASET,
+                            "tableId": table,
+                        },
+                        "sourceFormat": "CSV",
+                        "writeDisposition": "WRITE_APPEND",
+                        "skipLeadingRows": 1,
+                        "schema": {"fields": schema_fields},
+                    }
+                },
+                location="US",
+                project_id=PROJECT_ID,
+            )
 
-
-# join task 1 & task 2
-
-    # Task 3: Transform data in BigQuery
+            generate_task >> load_task
+            
+    # Task 3: join loaded tables in BigQuery
     join_loaded_tables = BigQueryInsertJobOperator(
         task_id="join_loaded_tables",
         configuration={
@@ -156,19 +139,11 @@ with DAG(
     )
 
 
-    # Task dependencies
+    # Dag dependencies
 
-    for i in range(1, len(generate_tasks) + 1):
-        start_task >> generate_tasks[f"generate_sales_data_table{i}"]
-    
-    for i in range(1, len(load_tasks) + 1):
-        generate_tasks[f"generate_sales_data_table{i}"] >> load_tasks[f"load_to_bigquery_table{i}"]
+    start_task >> gen_load_group >> join_loaded_tables >> end_task
 
-    list(load_tasks.values()) >> join_loaded_tables
-
-    join_loaded_tables >> end_task
-
-
+'''
     BIGQUERY_TABLES = {
         "tbl1":{
             "GCS":"data/multitable_sample_data1.csv",
@@ -188,9 +163,11 @@ with DAG(
         print(table_item["GCS"]) # data/multitable_sample_data1.csv
 
 
-# todo:
-# - multi_input_tables.py code optimization
-# - trigger rule testing (case error/operator failures)
+todo:
+- multi_input_tables.py code optimization
+- trigger rule testing (case error/operator failures)
+
+'''
 
 
 
@@ -198,9 +175,7 @@ with DAG(
 
 
 
-
-
-
+'''
 read mySql data to gcs via on-premise airflow? row by row or partitions?
 MySQLToGCSOperator()
 
@@ -208,3 +183,4 @@ splitting mysql db reading using limit in sql??
 
 how mysql db works? cursor :sscursor??
 
+'''

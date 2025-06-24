@@ -3,7 +3,7 @@ from airflow.providers.google.cloud.operators.bigquery import BigQueryInsertJobO
 from airflow.operators.python import PythonOperator
 from airflow.operators.empty import EmptyOperator
 from airflow.utils.trigger_rule import TriggerRule
-from airflow.exceptions import AirflowSkipException
+from airflow.utils.task_group import TaskGroup
 from datetime import datetime
 import pandas as pd
 from faker import Faker
@@ -14,10 +14,10 @@ import io
 # Configuration
 PROJECT_ID = "airflow-demo-project-463501"
 BUCKET_NAME = "us-central1-airflow-demo-de-53ac71a6-bucket"
-MULTI_GCS_PATHS = [
-    "data/trigger_test_sample_data1.csv",
-    "data/trigger_test_sample_data2.csv",
-]
+# MULTI_GCS_PATHS = [
+#     "data/trigger_test_sample_data1.csv",
+#     "data/trigger_test_sample_data2.csv",
+# ]
 BIGQUERY_DATASET = "demo_dataset"
 BIGQUERY_TABLES = {
     "data/trigger_test_sample_data1.csv": "trigger_test_data1",
@@ -70,7 +70,7 @@ default_args = {
 
 # DAG definition
 with DAG(
-    "trigger_rule_experiment_dag",
+    "trigger_rule_experiment",
     default_args=default_args,
     schedule_interval="0 0 1 * *", 
 ) as dag:
@@ -79,48 +79,48 @@ with DAG(
     end_task = EmptyOperator(task_id="end")
 
     # Task 1: Generate sales data and upload to GCS
-    generate_tasks = {}
-
-    for i, gcs_path in enumerate(MULTI_GCS_PATHS, start=1):
-        task = PythonOperator(
-            task_id=f"generate_sales_data_table{i}",
-            python_callable=generate_and_upload_sales_data,
-            op_kwargs={
-                "bucket_name": BUCKET_NAME,
-                "gcs_path": gcs_path,
-                "num_orders": 10,
-            },
-        )
-        generate_tasks[f"generate_sales_data_table{i}"] = task
-
-
     # Task 2: Load data from GCS to BigQuery
+    generate_tasks = {}
     load_tasks = {}
 
-    for i, (gcs_path, table) in enumerate(BIGQUERY_TABLES.items(), start=1):
-        task = BigQueryInsertJobOperator(
-            task_id=f"load_to_bigquery_table{i}",
-            configuration={
-                "load": {
-                    "sourceUris": [f"gs://{BUCKET_NAME}/{gcs_path}"],
-                    "destinationTable": {
-                        "projectId": PROJECT_ID,
-                        "datasetId": BIGQUERY_DATASET,
-                        "tableId": table,
-                    },
-                    "sourceFormat": "CSV",
-                    "writeDisposition": "WRITE_APPEND",
-                    "skipLeadingRows": 1,
-                    "schema": {"fields": schema_fields},
-                }
-            },
-            location="US",
-            project_id=PROJECT_ID,
-        )
-        load_tasks[f"load_to_bigquery_table{i}"] = task
+    with TaskGroup("gneerate_and_load_data", tooltip = "Generate data and load to BigQuery") as gen_load_group:
+        for i, (gcs_path, table) in enumerate(BIGQUERY_TABLES.items(), start=1):
+            generate_task = PythonOperator(
+                task_id=f"generate_sales_data_table{i}",
+                python_callable=generate_and_upload_sales_data,
+                op_kwargs={
+                    "bucket_name": BUCKET_NAME,
+                    "gcs_path": gcs_path,
+                    "num_orders": 10,
+                },
+            )
 
+            load_task = BigQueryInsertJobOperator(
+                task_id=f"load_to_bigquery_table{i}",
+                configuration={
+                    "load": {
+                        "sourceUris": [f"gs://{BUCKET_NAME}/{gcs_path}"],
+                        "destinationTable": {
+                            "projectId": PROJECT_ID,
+                            "datasetId": BIGQUERY_DATASET,
+                            "tableId": table,
+                        },
+                        "sourceFormat": "CSV",
+                        "writeDisposition": "WRITE_APPEND",
+                        "skipLeadingRows": 1,
+                        "schema": {"fields": schema_fields},
+                    }
+                },
+                location="US",
+                project_id=PROJECT_ID,
+            )
 
-    # Task 3: Transform data in BigQuery
+            generate_task >> load_task
+
+            generate_tasks[f"generate_sales_data_table{i}"] = generate_task
+            load_tasks[f"load_to_bigquery_table{i}"] = load_task
+
+    # Task 3: join loaded tables in BigQuery
     trigger_rule_tests = {
         "all_success": TriggerRule.ALL_SUCCESS,
         "all_failed": TriggerRule.ALL_FAILED,
@@ -156,15 +156,10 @@ with DAG(
         join_test_tasks[f"join_with_{name}"] = join_task
 
 
-    # Task dependencies
-
-    for i in range(1, len(generate_tasks) + 1):
-        start_task >> generate_tasks[f"generate_sales_data_table{i}"]
+    # Dag dependencies
+    start_task >> gen_load_group
     
-    for i in range(1, len(load_tasks) + 1):
-        generate_tasks[f"generate_sales_data_table{i}"] >> load_tasks[f"load_to_bigquery_table{i}"]
-    
-    for name in join_test_tasks:
-        load_tasks[f"load_to_bigquery_table{i}"] >> join_test_tasks[name]
+    for join_task in join_test_tasks.values():
+        list(load_tasks.values()) >> join_task
 
     list(join_test_tasks.values()) >> end_task
