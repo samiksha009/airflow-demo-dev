@@ -17,10 +17,9 @@ default_args = {
 
 # DAG definition
 with DAG(
-    "with_xcom",
+    "with_xcom2",
     default_args=default_args,
     schedule_interval="0 0 1 * *", 
-    render_template_as_native_obj=True,
 ) as dag:
 
     start_task = EmptyOperator(task_id="start")
@@ -46,7 +45,7 @@ with DAG(
                 task_id=f"load_to_bigquery_table{i}",
                 configuration={
                     "load": {
-                        "sourceUris": ["{{ params.source_uri }}"],
+                        "sourceUris": [f"{{{{ ti.xcom_pull(task_ids='generate_sales_data_table{i}', key='full_gcs_url') }}}}"],
                         "destinationTable": {
                             "projectId": PROJECT_ID,
                             "datasetId": BIGQUERY_DATASET,
@@ -61,9 +60,6 @@ with DAG(
                 location="US",
                 project_id=PROJECT_ID,
                 gcp_conn_id = "gcp_connection",
-                params={
-                    "source_uri": f"{{{{ ti.xcom_pull(task_ids='generate_sales_data_table{i}', key='full_gcs_url') }}}}",
-                },
             )
 
             generate_task >> load_task
