@@ -28,7 +28,7 @@ with DAG(
     # Task 1: Generate sales data and upload to GCS
     # Task 2: Load data from GCS to BigQuery
 
-    with TaskGroup("gneerate_and_load_data", tooltip = "Generate data and load to BigQuery") as gen_load_group:
+    with TaskGroup(group_id="generate_and_load_data", tooltip = "Generate data and load to BigQuery") as gen_load_group:
         for i, (gcs_path, table) in enumerate(BIGQUERY_TABLES.items(), start=1):
 
             generate_task = PythonOperator(
@@ -45,7 +45,7 @@ with DAG(
                 task_id=f"load_to_bigquery_table{i}",
                 configuration={
                     "load": {
-                        "sourceUris": [f"{{{{ ti.xcom_pull(task_ids='generate_sales_data_table{i}', key='full_gcs_url') }}}}"],
+                        "sourceUris": [f"{{{{ ti.xcom_pull(task_ids='generate_and_load_data.generate_sales_data_table{i}', key='full_gcs_url') }}}}"],
                         "destinationTable": {
                             "projectId": PROJECT_ID,
                             "datasetId": BIGQUERY_DATASET,
