@@ -45,7 +45,7 @@ with DAG(
                 task_id=f"load_to_bigquery_table{i}",
                 configuration={
                     "load": {
-                        "sourceUris": [f"{{{{ ti.xcom_pull(task_ids='generate_and_load_data.generate_sales_data_table{i}', key='full_gcs_url') }}}}"],
+                        "sourceUris": [f"{{{{ ti.xcom_pull(task_ids='generate_and_load_data.generate_sales_data_table{i}', key='gcs_url') }}}}"],
                         "destinationTable": {
                             "projectId": PROJECT_ID,
                             "datasetId": BIGQUERY_DATASET,
