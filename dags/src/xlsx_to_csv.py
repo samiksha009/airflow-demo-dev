@@ -43,3 +43,4 @@ def clean_and_convert_xlsx_to_csv(input_xlsx_path, output_csv_path):
     # export to csv
     df.to_csv(output_csv_path, index= False, encoding = 'utf-8')
     print(f"CSV saved to {output_csv_path}")
+    

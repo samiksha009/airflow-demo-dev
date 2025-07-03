@@ -1,0 +1,29 @@
+{
+  "fileA.xlsx": {
+    "required_columns": ["num1", "num2", "dt1"],
+    "column_types": {
+      "no": "string",
+      "str1": "string",
+      "str2": "string",
+      "int1": "int",
+      "int2": "int",
+      "num1": "numeric",
+      "num2": "numeric",
+      "num3": "numeric",
+      "num4": "numeric",
+      "num5": "numeric",
+      "dt1": "date",
+      "dt2": "date",
+      "dt3": "date",
+      "dt4": "date"
+    }
+  },
+  "fileB.xlsx": {
+    "required_columns": ["id", "value"],
+    "column_types": {
+      "id": "int",
+      "value": "numeric",
+      "created_at": "date"
+    }
+  }
+}
